@@ -22,7 +22,10 @@ const normalizeOrigins = (value) => {
 };
 
 const getAllowedOrigins = () => {
-  const configuredOrigins = normalizeOrigins(process.env.CORS_ORIGIN);
+  const configuredOrigins = [
+    ...normalizeOrigins(process.env.CORS_ORIGIN),
+    ...normalizeOrigins(process.env.FRONTEND_URL),
+  ].map((origin) => origin.replace(/\/+$/, ''));
   const defaultOrigins = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
@@ -54,6 +57,10 @@ const PORT = Number(process.env.PORT) || DEFAULT_PORT;
 
 app.get('/', (req, res) => {
   res.send('Ochilive backend is running');
+});
+
+app.get('/healthz', (req, res) => {
+  res.status(200).json({ status: 'ok' });
 });
 
 app.use('/api', apiRoutes);
