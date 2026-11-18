@@ -1,5 +1,5 @@
 const express = require('express');
-const { registerUser, loginUser, verifyOtp, sendTestEmail, checkUsernameAvailability, requestPasswordReset, resetPassword, startGoogleSignIn, googleCallback, exchangeGoogleHandoff } = require('../controllers/authController');
+const { registerUser, loginUser, sendTestEmail, checkUsernameAvailability, requestPasswordReset, resetPassword, startGoogleSignIn, googleCallback, exchangeGoogleHandoff } = require('../controllers/authController');
 const authenticate = require('../middleware/authGuard');
 const dashboardRoutes = require('./dashboardRoutes');
 const videoRoutes = require('./videoRoutes');
@@ -19,7 +19,6 @@ router.post('/auth/google/exchange', exchangeGoogleHandoff);
 router.get('/auth/username-availability', checkUsernameAvailability);
 router.post('/auth/forgot-password', requestPasswordReset);
 router.post('/auth/reset-password', resetPassword);
-router.post('/auth/verify', verifyOtp);
 router.post('/auth/test-email', sendTestEmail);
 router.post('/auth/login', loginUser);
 router.get('/profile', authenticate, (req, res) => {

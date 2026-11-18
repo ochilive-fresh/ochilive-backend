@@ -3,7 +3,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('module');
-const { registerUser, checkUsernameAvailability } = require('../src/controllers/authController');
+const { registerUser, loginUser, checkUsernameAvailability } = require('../src/controllers/authController');
 const { sendMessage } = require('../src/controllers/messageController');
 const { createUser } = require('../src/services/userStore');
 const { searchProfiles, rateProfile } = require('../src/controllers/profileController');
@@ -45,16 +45,23 @@ test('registerUser rejects invalid email formats', async () => {
   assert.match(res.body.message, /email/i);
 });
 
-test('registerUser returns an email delivery failure response instead of a fake pending OTP state', async () => {
-  const req = { body: { name: 'OTP User', email: 'otp@example.com', username: 'otp_user', password: 'StrongPass123!' } };
+test('registerUser creates an account and returns a login session without email verification', async () => {
+  const email = `signup-${Date.now()}@example.com`;
+  const username = `signup_${Date.now()}`;
+  const req = { body: { name: 'Signup User', email, username, password: 'StrongPass123!' } };
   const res = createRes();
 
   await registerUser(req, res);
 
-  assert.equal(res.statusCode, 503);
-  assert.equal(res.body.pending, false);
-  assert.equal(res.body.email, 'otp@example.com');
-  assert.match(res.body.message, /delivery|configured|retry/i);
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.body.user.email, email);
+  assert.equal(res.body.user.username, username);
+  assert.ok(res.body.token);
+
+  const loginRes = createRes();
+  await loginUser({ body: { identity: email, password: 'StrongPass123!' } }, loginRes);
+  assert.equal(loginRes.statusCode, 200);
+  assert.equal(loginRes.body.user.username, username);
 });
 
 test('sendMessage handles malformed text payloads without throwing', async () => {

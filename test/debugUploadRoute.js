@@ -1,6 +1,5 @@
 process.env.NODE_ENV = 'test';
 const http = require('http');
-const { randomUUID } = require('crypto');
 
 const API_BASE = 'http://127.0.0.1:5000/api';
 
@@ -41,14 +40,9 @@ function sendRequest(pathname, method = 'GET', body = null, headers = {}) {
   const register = await sendRequest('/auth/register', 'POST', { name: 'Debug User', email, username, password: 'StrongPass123!' });
   console.log('register', register.statusCode, JSON.stringify(register.body));
 
-  if (register.statusCode !== 200) process.exit(0);
+  if (register.statusCode !== 201) process.exit(0);
 
-  const verify = await sendRequest('/auth/verify', 'POST', { email, otp: String(register.body.otp) });
-  console.log('verify', verify.statusCode, JSON.stringify(verify.body));
-
-  if (verify.statusCode !== 201) process.exit(0);
-
-  const token = verify.body.token;
+  const token = register.body.token;
   const form = new FormData();
   const imageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAFfcafAAAAAXNSR0IArwAABKR5F2gEAAAABJRU5ErkJggg==';
   const imageBuffer = Buffer.from(imageBase64, 'base64');

@@ -11,7 +11,7 @@ const API_BASE = 'http://127.0.0.1:5000/api';
 const makeUniqueEmail = () => `product-smoke-${Date.now()}-${Math.round(Math.random() * 999999)}@example.com`;
 const makeUniqueUsername = () => `smoke_${Math.round(Math.random() * 99999)}_${String(Date.now()).slice(-6)}`;
 
-async function registerAndVerify(email, username, password = 'StrongPass123!') {
+async function registerAccount(email, username, password = 'StrongPass123!') {
   const registerResponse = await sendRequest('/auth/register', 'POST', {
     name: 'Smoke User',
     email,
@@ -19,20 +19,10 @@ async function registerAndVerify(email, username, password = 'StrongPass123!') {
     password,
   });
 
-  assert.equal(registerResponse.statusCode, 200);
-  assert.equal(registerResponse.body.pending, true);
-  assert.ok(registerResponse.body.otp);
-
-  const verifyResponse = await sendRequest('/auth/verify', 'POST', {
-    email,
-    otp: String(registerResponse.body.otp),
-  });
-
-  assert.equal(verifyResponse.statusCode, 201);
-  assert.ok(verifyResponse.body.token);
-  assert.equal(verifyResponse.body.user.username, username);
-
-  return verifyResponse.body;
+  assert.equal(registerResponse.statusCode, 201);
+  assert.ok(registerResponse.body.token);
+  assert.equal(registerResponse.body.user.username, username);
+  return registerResponse.body;
 }
 
 function sendRequest(pathname, method = 'GET', body = null, headers = {}) {
@@ -122,7 +112,7 @@ test('public auth route rejects malformed registration payload', async () => {
 test('authenticated session can reach protected feed and profile routes', async () => {
   const email = makeUniqueEmail();
   const username = makeUniqueUsername();
-  const auth = await registerAndVerify(email, username);
+  const auth = await registerAccount(email, username);
   const token = auth.token;
 
   const loginResponse = await sendRequest('/auth/login', 'POST', {
@@ -151,7 +141,7 @@ test('authenticated session can reach protected feed and profile routes', async 
 test('authenticated upload-file route accepts a real image payload and reports Cloudinary media metadata', async () => {
   const email = makeUniqueEmail();
   const username = makeUniqueUsername();
-  const auth = await registerAndVerify(email, username);
+  const auth = await registerAccount(email, username);
   const token = auth.token;
 
   const imagePath = path.join(__dirname, '..', '..', 'frontend', 'src', 'assets', 'animations', 'screen.png');
@@ -170,7 +160,7 @@ test('authenticated upload-file route accepts a real image payload and reports C
 test('authenticated comedian can create and start a live room and receive LiveKit host and viewer tokens', async () => {
   const email = makeUniqueEmail();
   const username = makeUniqueUsername();
-  const auth = await registerAndVerify(email, username);
+  const auth = await registerAccount(email, username);
   const token = auth.token;
 
   const onboardingResponse = await sendRequest('/profile/me/comedy-onboarding', 'POST', {
@@ -229,7 +219,7 @@ test('authenticated comedian can create and start a live room and receive LiveKi
 test('authenticated wallet funding initializer rejects low amounts and reaches the Paystack handoff when the amount is valid', async () => {
   const email = makeUniqueEmail();
   const username = makeUniqueUsername();
-  const auth = await registerAndVerify(email, username);
+  const auth = await registerAccount(email, username);
   const token = auth.token;
 
   const lowAmountResponse = await sendRequest('/dashboard/wallet/fund/initialize', 'POST', {
@@ -259,8 +249,8 @@ test('authenticated wallet funding initializer rejects low amounts and reaches t
 });
 
 test('authenticated messaging routes create and fetch a conversation with a real message payload', async () => {
-  const senderAuth = await registerAndVerify(makeUniqueEmail(), makeUniqueUsername());
-  const receiverAuth = await registerAndVerify(makeUniqueEmail(), makeUniqueUsername());
+  const senderAuth = await registerAccount(makeUniqueEmail(), makeUniqueUsername());
+  const receiverAuth = await registerAccount(makeUniqueEmail(), makeUniqueUsername());
 
   const sendResponse = await sendRequest('/messages/send', 'POST', {
     receiverId: receiverAuth.user.id,

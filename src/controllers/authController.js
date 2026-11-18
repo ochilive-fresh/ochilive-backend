@@ -1,11 +1,12 @@
 const crypto = require('crypto');
 const { createToken, sanitizeUser, isValidEmail, isStrongPassword } = require('../utils/auth');
-const { findByEmail, findUsersByEmail, countUsersByEmail, findByUsername, createUser, storePendingRegistration, getPendingRegistration, deletePendingRegistration, usernameExists, reserveUsername, releaseUsernameReservation, storePasswordReset, getPasswordReset, deletePasswordReset, updateById } = require('../services/userStore');
+const { findByEmail, findUsersByEmail, countUsersByEmail, findByUsername, createUser, usernameExists, storePasswordReset, getPasswordReset, deletePasswordReset, updateById } = require('../services/userStore');
 const { sendOtpEmail, sendPasswordResetEmail } = require('../services/emailService');
 const { getUsernameValidation, normalizeUsername } = require('../utils/usernamePolicy');
 
 const getOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
 const hashCode = (code) => crypto.createHash('sha256').update(code).digest('hex');
+const createUserId = () => `user_${crypto.randomUUID()}`;
 const googleStates = new Map();
 const googleHandoffs = new Map();
 
@@ -37,7 +38,7 @@ const createGoogleAccount = async ({ name, email, picture }) => {
   }
 
   const newUser = {
-    id: `user_${Date.now()}`,
+    id: createUserId(),
     name: displayName,
     email: normalizedEmail,
     username: normalizeUsername(username),
@@ -89,40 +90,32 @@ exports.registerUser = async (req, res) => {
     return res.status(409).json({ message: 'This email has reached the two-account limit. Please use another email.' });
   }
 
-  const otp = getOtp();
-  const pending = {
-    id: `pending_${Date.now()}`,
+  const newUser = {
+    id: createUserId(),
     name: displayName,
     email: normalizedEmail,
     username: normalizedUsername,
     password: password.trim(),
-    otp,
-    expiresAt: Date.now() + 10 * 60 * 1000,
+    profilePictureUrl: '',
+    bio: '',
+    accountType: 'creator',
+    comedyProfile: {},
+    followerIds: [],
+    followingIds: [],
   };
 
-  if (!await reserveUsername(normalizedUsername, normalizedEmail, pending.expiresAt)) {
-    return res.status(409).json({ message: 'That username was just taken. Please choose another one.' });
-  }
-
-  await storePendingRegistration(normalizedEmail, pending);
-
   try {
-    await sendOtpEmail(normalizedEmail, otp);
+    await createUser(newUser);
   } catch (error) {
-    console.error(error.message);
-    return res.status(503).json({
-      message: 'Verification email delivery could not be completed. Please request a new code or retry after the mail service is configured.',
-      pending: false,
-      email: normalizedEmail,
-      emailDeliveryFailed: true,
-    });
+    if (error.code === 11000) return res.status(409).json({ message: 'That username was just taken. Please choose another one.' });
+    console.error('Unable to create account:', error.message);
+    return res.status(500).json({ message: 'Unable to create your account right now.' });
   }
 
-  return res.status(200).json({
-    message: 'Verification code sent. Please confirm the code to finish creating your account.',
-    pending: true,
-    email: normalizedEmail,
-    ...(process.env.NODE_ENV !== 'production' && process.env.RETURN_TEST_OTP === 'true' ? { otp } : {}),
+  return res.status(201).json({
+    message: 'Account created successfully.',
+    token: createToken(newUser),
+    user: sanitizeUser(newUser),
   });
 };
 
@@ -193,61 +186,6 @@ exports.exchangeGoogleHandoff = (req, res) => {
   }
   googleHandoffs.delete(req.body.code);
   return res.status(200).json({ message: handoff.message, token: createToken(handoff.user), user: sanitizeUser(handoff.user) });
-};
-
-exports.verifyOtp = async (req, res) => {
-  const { email, otp } = req.body || {};
-
-  if (!email?.trim() || !otp?.trim()) {
-    return res.status(400).json({ message: 'Please provide your email and verification code.' });
-  }
-
-  const normalizedEmail = email.toLowerCase().trim();
-  const pending = await getPendingRegistration(normalizedEmail);
-
-  if (!pending) {
-    return res.status(404).json({ message: 'No pending verification found for this email.' });
-  }
-
-  if (pending.expiresAt < Date.now()) {
-    await releaseUsernameReservation(pending.username, normalizedEmail);
-    await deletePendingRegistration(normalizedEmail);
-    return res.status(410).json({ message: 'Verification code expired. Please request a new one.' });
-  }
-
-  if (pending.otp !== otp.trim()) {
-    return res.status(401).json({ message: 'The verification code is incorrect.' });
-  }
-
-  const newUser = {
-    id: `user_${Date.now()}`,
-    name: pending.name,
-    email: pending.email,
-    username: pending.username,
-    password: pending.password,
-    profilePictureUrl: '',
-    bio: '',
-    accountType: 'creator',
-    comedyProfile: {},
-    followerIds: [],
-    followingIds: [],
-  };
-
-  try {
-    await createUser(newUser);
-  } catch (error) {
-    await releaseUsernameReservation(pending.username, normalizedEmail);
-    if (error.code === 11000) return res.status(409).json({ message: 'That username was taken while you were verifying your email. Please choose another one.' });
-    return res.status(500).json({ message: 'Unable to create your account.' });
-  }
-  await releaseUsernameReservation(pending.username, normalizedEmail);
-  await deletePendingRegistration(normalizedEmail);
-
-  res.status(201).json({
-    message: 'Account created successfully.',
-    token: createToken(newUser),
-    user: sanitizeUser(newUser),
-  });
 };
 
 exports.checkUsernameAvailability = async (req, res) => {
