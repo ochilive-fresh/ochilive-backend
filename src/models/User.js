@@ -28,6 +28,9 @@ const userSchema = new mongoose.Schema({
   },
   followerIds: { type: [String], default: [] },
   followingIds: { type: [String], default: [] },
+  watchedVideos: { type: [String], default: [] },
+  completedVideoIds: { type: [String], default: [] },
+  lastViewedVideoId: { type: String, default: '' },
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema);

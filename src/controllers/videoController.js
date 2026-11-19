@@ -20,6 +20,9 @@ const normalizeVideoPayload = (video) => {
 const enrichFeedVideos = async (videos, viewer) => Promise.all(videos.map(async (video) => {
   const creator = video.creatorId ? await findById(video.creatorId) : null;
   const followingIds = Array.isArray(viewer?.followingIds) ? viewer.followingIds.map(String) : [];
+  const watchedVideos = Array.isArray(viewer?.watchedVideos) ? viewer.watchedVideos.map(String) : [];
+  const completedVideoIds = Array.isArray(viewer?.completedVideoIds) ? viewer.completedVideoIds.map(String) : [];
+  const videoId = String(video.id || video._id || '');
   const viewerId = String(viewer?.id || '');
   const likedBy = Array.isArray(video.likedBy) ? video.likedBy.map(String) : [];
   const safeVideo = { ...video };
@@ -36,22 +39,46 @@ const enrichFeedVideos = async (videos, viewer) => Promise.all(videos.map(async 
     creatorUsername: creator?.username || video.creatorUsername || '',
     isFollowing: followingIds.includes(String(video.creatorId)),
     liked: Boolean(viewerId && likedBy.includes(viewerId)),
+    watched: watchedVideos.includes(videoId),
+    completed: completedVideoIds.includes(videoId),
   };
 }));
 
-const getForYouVideos = async (viewer) => {
+const getForYouVideos = async (viewer, before) => {
   const followingIds = Array.isArray(viewer?.followingIds) ? viewer.followingIds.map(String) : [];
+  const watchedVideos = Array.isArray(viewer?.watchedVideos) ? viewer.watchedVideos.map(String) : [];
   const viewerId = String(viewer?.id || '');
   if (!isMongoReady()) {
     const videos = await listPublishedVideos();
-    const visible = videos.filter((video) => video.visibility === 'public' || (video.visibility === 'followers' && followingIds.includes(String(video.creatorId))) || (video.visibility === 'private' && String(video.creatorId) === viewerId)).map((video) => normalizeVideoPayload(video));
-    return enrichFeedVideos(visible, viewer);
+    const visible = videos
+      .filter((video) => (!before || new Date(video.createdAt) < before) && (
+        video.visibility === 'public'
+        || (video.visibility === 'followers' && followingIds.includes(String(video.creatorId)))
+        || (video.visibility === 'private' && String(video.creatorId) === viewerId)
+      ))
+      .map((video) => normalizeVideoPayload(video));
+    const unseen = visible.filter((video) => !watchedVideos.includes(String(video.id)));
+    const selected = unseen.length ? unseen : (before ? [] : visible);
+    return enrichFeedVideos(selected.slice(0, 50), viewer);
   }
 
-  const videos = await Video.find({ status: 'published', $or: [{ visibility: 'public' }, { visibility: 'followers', creatorId: { $in: followingIds } }, { visibility: 'private', creatorId: viewerId }] })
+  const visibleFilter = {
+    status: 'published',
+    $or: [{ visibility: 'public' }, { visibility: 'followers', creatorId: { $in: followingIds } }, { visibility: 'private', creatorId: viewerId }],
+    ...(before ? { createdAt: { $lt: before } } : {}),
+  };
+  const validWatchedIds = watchedVideos.filter((id) => mongoose.Types.ObjectId.isValid(id));
+  let videos = await Video.find({
+    ...visibleFilter,
+    ...(validWatchedIds.length ? { _id: { $nin: validWatchedIds } } : {}),
+  })
     .sort({ createdAt: -1 })
     .lean()
     .limit(50);
+
+  if (!videos.length && validWatchedIds.length && !before) {
+    videos = await Video.find(visibleFilter).sort({ createdAt: -1 }).lean().limit(50);
+  }
 
   const payload = videos.map(({ _id, __v, createdAt, ...video }) => ({
     ...video,
@@ -149,6 +176,10 @@ const getVideoFeed = async (req, res) => {
     const mode = String(req.query.mode || 'for_you').toLowerCase();
     const validModes = ['for_you', 'following', 'trending', 'recent_live'];
     const selectedMode = validModes.includes(mode) ? mode : 'for_you';
+    const before = req.query.before ? new Date(req.query.before) : null;
+    if (req.query.before && !Number.isFinite(before.getTime())) {
+      return res.status(400).json({ message: 'A valid feed cursor is required.' });
+    }
 
     if (selectedMode === 'recent_live') {
       const payload = await getRecentLiveRooms();
@@ -195,7 +226,7 @@ const getVideoFeed = async (req, res) => {
       return res.json(await enrichFeedVideos(payload, req.user));
     }
 
-    const payload = await getForYouVideos(req.user);
+    const payload = await getForYouVideos(req.user, before);
     return res.json(payload);
   } catch (error) {
     console.error('Error fetching video feed:', error.message);

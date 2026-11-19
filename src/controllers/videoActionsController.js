@@ -4,6 +4,7 @@ const Reshare = require('../models/Reshare');
 const { toggleSavedVideo, getSavedVideoIds } = require('../services/savedStore');
 const { findVideoById: findMemoryVideoById, updateLikeState, addCommentToVideo } = require('../services/videoStore');
 const { createNotification } = require('../services/notificationStore');
+const { recordVideoWatch: persistVideoWatch } = require('../services/userStore');
 
 const isMongoReady = () => mongoose.connection.readyState === 1 && typeof Video !== 'undefined';
 
@@ -67,6 +68,39 @@ const incrementViews = async (req, res) => {
   } catch (error) {
     console.error('incrementViews error:', error.message);
     return res.status(500).json({ message: 'Unable to update view count.' });
+  }
+};
+
+const recordVideoWatch = async (req, res) => {
+  try {
+    const videoId = String(req.params.id || '');
+    if (isMongoReady() && !mongoose.Types.ObjectId.isValid(videoId)) {
+      return res.status(404).json({ message: 'Video not found.' });
+    }
+
+    const video = await findVideoById(videoId);
+    const viewerId = String(req.user?.id || '');
+    const followingIds = Array.isArray(req.user?.followingIds) ? req.user.followingIds.map(String) : [];
+    const creatorId = String(video.creatorId || '');
+    const canView = video.status === 'published' && (
+      video.visibility === 'public'
+      || (video.visibility === 'followers' && followingIds.includes(creatorId))
+      || (video.visibility === 'private' && creatorId === viewerId)
+    );
+    if (!canView) return res.status(404).json({ message: 'Video not found.' });
+
+    const completed = req.body?.completed === true;
+    const user = await persistVideoWatch(viewerId, videoId, completed);
+    if (!user) return res.status(401).json({ message: 'Authentication required.' });
+    return res.json({
+      watched: true,
+      completed: (user.completedVideoIds || []).map(String).includes(videoId),
+      lastViewedVideoId: user.lastViewedVideoId,
+    });
+  } catch (error) {
+    if (error.status === 404) return res.status(404).json({ message: 'Video not found.' });
+    console.error('recordVideoWatch error:', error.message);
+    return res.status(500).json({ message: 'Unable to save watch history.' });
   }
 };
 
@@ -239,6 +273,7 @@ const getSavedVideos = async (req, res) => {
 
 module.exports = {
   incrementViews,
+  recordVideoWatch,
   likeVideo,
   commentOnVideo,
   reshareVideo,

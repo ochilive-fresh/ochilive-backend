@@ -9,9 +9,9 @@ const {
   clearVideoStore,
 } = require('../src/services/videoStore');
 const videoActionsController = require('../src/controllers/videoActionsController');
-const { getVideoById } = require('../src/controllers/videoController');
+const { getVideoById, getVideoFeed } = require('../src/controllers/videoController');
 const profileController = require('../src/controllers/profileController');
-const { createUser } = require('../src/services/userStore');
+const { createUser, findById } = require('../src/services/userStore');
 const optionalAuth = require('../src/middleware/optionalAuthGuard');
 const { loginUser } = require('../src/controllers/authController');
 
@@ -26,6 +26,110 @@ const makeResponse = () => ({
     this.body = body;
     return this;
   },
+});
+
+test('watch history persists completion and For You prioritizes unseen videos', async () => {
+  clearVideoStore();
+  const suffix = Date.now().toString();
+  const user = {
+    id: `watcher-${suffix}`,
+    name: 'Watch Tester',
+    email: `watcher-${suffix}@example.com`,
+    username: `watcher_${suffix}`,
+    password: 'private',
+    followingIds: [],
+    followerIds: [],
+  };
+  await createUser(user);
+  const watchedVideo = await createVideo({ title: 'Already watched', mediaUrl: 'https://example.com/watched.mp4' });
+  const unseenVideo = await createVideo({ title: 'Not watched yet', mediaUrl: 'https://example.com/unseen.mp4' });
+
+  const watchedResponse = makeResponse();
+  await videoActionsController.recordVideoWatch({
+    params: { id: watchedVideo.id },
+    body: { completed: false },
+    user,
+  }, watchedResponse);
+  assert.equal(watchedResponse.statusCode, 200);
+  assert.equal(watchedResponse.body.watched, true);
+
+  const completedResponse = makeResponse();
+  await videoActionsController.recordVideoWatch({
+    params: { id: watchedVideo.id },
+    body: { completed: true },
+    user,
+  }, completedResponse);
+  assert.equal(completedResponse.body.completed, true);
+
+  const updatedUser = await findById(user.id);
+  assert.deepEqual(updatedUser.watchedVideos, [watchedVideo.id]);
+  assert.deepEqual(updatedUser.completedVideoIds, [watchedVideo.id]);
+  assert.equal(updatedUser.lastViewedVideoId, watchedVideo.id);
+
+  const feedResponse = makeResponse();
+  await getVideoFeed({ query: { mode: 'for_you' }, user: updatedUser }, feedResponse);
+  assert.deepEqual(feedResponse.body.map((video) => video.id), [unseenVideo.id]);
+
+  await videoActionsController.recordVideoWatch({
+    params: { id: unseenVideo.id },
+    body: { completed: true },
+    user,
+  }, makeResponse());
+  const exhaustedFeedResponse = makeResponse();
+  await getVideoFeed({ query: { mode: 'for_you' }, user: await findById(user.id) }, exhaustedFeedResponse);
+  assert.deepEqual(new Set(exhaustedFeedResponse.body.map((video) => video.id)), new Set([watchedVideo.id, unseenVideo.id]));
+  assert.equal(exhaustedFeedResponse.body.every((video) => video.watched), true);
+
+  clearVideoStore();
+});
+
+test('For You cursor loads further unseen videos without replaying watched posts', async () => {
+  clearVideoStore();
+  const suffix = Date.now().toString();
+  const user = {
+    id: `cursor-watcher-${suffix}`,
+    name: 'Cursor Tester',
+    email: `cursor-${suffix}@example.com`,
+    username: `cursor_${suffix}`,
+    password: 'private',
+    followingIds: [],
+    followerIds: [],
+  };
+  await createUser(user);
+  const posts = [];
+  for (let index = 0; index < 52; index += 1) {
+    posts.push(await createVideo({
+      title: `Cursor post ${index}`,
+      mediaUrl: `https://example.com/cursor-${index}.mp4`,
+      createdAt: new Date(Date.now() - index * 1000),
+    }));
+  }
+  await videoActionsController.recordVideoWatch({
+    params: { id: posts[0].id },
+    body: { completed: true },
+    user,
+  }, makeResponse());
+
+  const firstPage = makeResponse();
+  await getVideoFeed({ query: { mode: 'for_you' }, user: await findById(user.id) }, firstPage);
+  assert.equal(firstPage.body.length, 50);
+  assert.equal(firstPage.body.some((video) => video.id === posts[0].id), false);
+
+  const lastLoadedVideo = firstPage.body[firstPage.body.length - 1];
+  const secondPage = makeResponse();
+  await getVideoFeed({
+    query: { mode: 'for_you', before: lastLoadedVideo.createdAt },
+    user: await findById(user.id),
+  }, secondPage);
+  assert.deepEqual(secondPage.body.map((video) => video.id), [posts[51].id]);
+
+  const exhaustedPage = makeResponse();
+  await getVideoFeed({
+    query: { mode: 'for_you', before: secondPage.body[0].createdAt },
+    user: await findById(user.id),
+  }, exhaustedPage);
+  assert.deepEqual(exhaustedPage.body, []);
+  clearVideoStore();
 });
 
 test('memory video likes can be added and removed without incorrect counts', async () => {

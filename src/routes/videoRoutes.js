@@ -9,6 +9,7 @@ const { getVideoFeed, getVideoById, uploadVideoPost } = require('../controllers/
 const { getVideoThumbnailUrl, getOptimizedMediaUrl, uploadBuffer } = require('../services/cloudinaryService');
 const {
   incrementViews,
+  recordVideoWatch,
   likeVideo,
   commentOnVideo,
   toggleSaveVideo,
@@ -194,6 +195,7 @@ router.post('/live/rooms/:id/host-token', authenticate, requireComedian, issueHo
 router.post('/live/rooms/:id/viewer-token', authenticate, issueViewerToken);
 router.post('/live/rooms/:id/participants/remove', authenticate, removeLiveParticipant);
 router.post('/:id/view', incrementViews);
+router.post('/:id/watch', authenticate, recordVideoWatch);
 router.post('/:id/like', authenticate, likeVideo);
 router.post('/:id/reshare', authenticate, reshareVideo);
 router.post('/:id/comments', authenticate, commentOnVideo);

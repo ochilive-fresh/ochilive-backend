@@ -163,6 +163,39 @@ const updateById = async (id, updates) => {
   }
 };
 
+const recordVideoWatch = async (userId, videoId, completed = false) => {
+  if (shouldUseMemoryStore()) {
+    const user = memoryUsers.find((item) => item.id === userId);
+    if (!user) return null;
+    user.watchedVideos = [...new Set([...(user.watchedVideos || []).map(String), String(videoId)])];
+    if (completed) {
+      user.completedVideoIds = [...new Set([...(user.completedVideoIds || []).map(String), String(videoId)])];
+    }
+    user.lastViewedVideoId = String(videoId);
+    return user;
+  }
+
+  try {
+    const update = {
+      $addToSet: { watchedVideos: String(videoId) },
+      $set: { lastViewedVideoId: String(videoId) },
+    };
+    if (completed) update.$addToSet.completedVideoIds = String(videoId);
+    return await User.findOneAndUpdate({ id: userId }, update, { new: true, lean: true });
+  } catch (error) {
+    if (isMongoRequired()) throw error;
+    console.warn('MongoDB unavailable for recordVideoWatch, falling back to memory store:', error.message);
+    const user = memoryUsers.find((item) => item.id === userId);
+    if (!user) return null;
+    user.watchedVideos = [...new Set([...(user.watchedVideos || []).map(String), String(videoId)])];
+    if (completed) {
+      user.completedVideoIds = [...new Set([...(user.completedVideoIds || []).map(String), String(videoId)])];
+    }
+    user.lastViewedVideoId = String(videoId);
+    return user;
+  }
+};
+
 const updateRelationships = async (id, update) => {
   if (shouldUseMemoryStore()) {
     const user = memoryUsers.find((item) => item.id === id);
@@ -232,6 +265,7 @@ module.exports = {
   findByUsername,
   searchUsers,
   updateById,
+  recordVideoWatch,
   updateRelationships,
   usernameExists,
   createUser,
