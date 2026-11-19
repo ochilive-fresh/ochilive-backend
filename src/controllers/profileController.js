@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const Video = require('../models/Video');
 const Reshare = require('../models/Reshare');
-const { findByUsername, searchUsers, updateById, updateRelationships, usernameExists } = require('../services/userStore');
+const { findByUsername, findManyByIds, searchUsers, updateById, updateRelationships, usernameExists } = require('../services/userStore');
 const { listVideosByCreator } = require('../services/videoStore');
 const { getUsernameValidation, normalizeUsername } = require('../utils/usernamePolicy');
 const { createNotification } = require('../services/notificationStore');
@@ -51,6 +51,14 @@ const getProfile = async (req, res) => {
     if (isOwnProfile) visibility.push('private');
     const statuses = isOwnProfile ? ['published', 'queued'] : ['published'];
     payload.stats.posts = await Video.countDocuments({ creatorId: user.id, status: { $in: statuses }, visibility: { $in: visibility } });
+    if (isOwnProfile) {
+      const insights = await Video.aggregate([
+        { $match: { creatorId: user.id, status: { $in: statuses }, visibility: { $in: visibility } } },
+        { $group: { _id: null, views: { $sum: '$views' }, likes: { $sum: '$likes' } } },
+      ]);
+      payload.stats.views = Number(insights[0]?.views || 0);
+      payload.stats.likes = Number(insights[0]?.likes || 0);
+    }
   } else {
     const posts = await listVideosByCreator(user.id);
     payload.stats.posts = posts.filter((post) => {
@@ -60,11 +68,45 @@ const getProfile = async (req, res) => {
         || (post.visibility === 'private' && isOwnProfile);
       return visibleStatus && visibleToViewer;
     }).length;
+    if (isOwnProfile) {
+      const visiblePosts = posts.filter((post) => {
+        const visibleStatus = post.status === 'published' || post.status === 'queued';
+        const visibleToViewer = post.visibility === 'public' || post.visibility === 'followers' || post.visibility === 'private';
+        return visibleStatus && visibleToViewer;
+      });
+      payload.stats.views = visiblePosts.reduce((total, post) => total + Number(post.views || 0), 0);
+      payload.stats.likes = visiblePosts.reduce((total, post) => total + Number(post.likes || 0), 0);
+    }
   }
   if (user.accountType === 'comedian') {
     payload.user.comedyProfile = { ...payload.user.comedyProfile, ...(await summarizeRatings(user.id)) };
   }
   return res.json(payload);
+};
+
+const getProfileRelationships = async (req, res) => {
+  const target = await findByUsername(req.params.username);
+  if (!target) return res.status(404).json({ message: 'Profile not found.' });
+  const type = req.params.type;
+  if (!['followers', 'following'].includes(type)) return res.status(400).json({ message: 'Relationship type must be followers or following.' });
+
+  const page = Math.max(1, Number.parseInt(req.query?.page, 10) || 1);
+  const limit = Math.min(50, Math.max(1, Number.parseInt(req.query?.limit, 10) || 24));
+  const ids = Array.isArray(target[type === 'followers' ? 'followerIds' : 'followingIds'])
+    ? target[type === 'followers' ? 'followerIds' : 'followingIds'].map(String)
+    : [];
+  const pageIds = ids.slice((page - 1) * limit, page * limit);
+  const users = await findManyByIds(pageIds);
+  const viewerFollowing = new Set((req.user?.followingIds || []).map(String));
+  return res.json({
+    users: users.map((user) => ({
+      ...publicUser(user),
+      isFollowing: viewerFollowing.has(String(user.id)),
+    })),
+    page,
+    hasMore: page * limit < ids.length,
+    total: ids.length,
+  });
 };
 
 const rateProfile = async (req, res) => {
@@ -296,4 +338,16 @@ const getReshares = async (req, res) => {
   return res.json(formattedReshares);
 };
 
-module.exports = { getProfile, updateProfile, updateProfilePicture, completeComedyOnboarding, followProfile, unfollowProfile, rateProfile, searchProfiles, getPosts, getReshares };
+module.exports = {
+  getProfile,
+  getProfileRelationships,
+  updateProfile,
+  updateProfilePicture,
+  completeComedyOnboarding,
+  followProfile,
+  unfollowProfile,
+  rateProfile,
+  searchProfiles,
+  getPosts,
+  getReshares,
+};

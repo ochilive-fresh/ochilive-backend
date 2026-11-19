@@ -168,7 +168,7 @@ test('anonymous profile reads expose only published public posts', async () => {
     followingIds: [],
   };
   await createUser(creator);
-  await createVideo({ creatorId: creator.id, creatorName: creator.name, title: 'Public', mediaUrl: 'https://example.com/public.mp4', visibility: 'public' });
+  await createVideo({ creatorId: creator.id, creatorName: creator.name, title: 'Public', mediaUrl: 'https://example.com/public.mp4', visibility: 'public', views: 10, likes: 3 });
   await createVideo({ creatorId: creator.id, creatorName: creator.name, title: 'Followers', mediaUrl: 'https://example.com/followers.mp4', visibility: 'followers' });
   await createVideo({ creatorId: creator.id, creatorName: creator.name, title: 'Private', mediaUrl: 'https://example.com/private.mp4', visibility: 'private' });
   await createVideo({ creatorId: creator.id, creatorName: creator.name, title: 'Queued', mediaUrl: 'https://example.com/queued.mp4', status: 'queued' });
@@ -181,10 +181,47 @@ test('anonymous profile reads expose only published public posts', async () => {
   assert.equal(Object.hasOwn(profileResponse.body.user, 'email'), false);
   assert.equal(Object.hasOwn(profileResponse.body.user, 'password'), false);
 
+  const ownerProfileResponse = makeResponse();
+  await profileController.getProfile({ params: { username: creator.username }, user: { id: creator.id, followingIds: [] } }, ownerProfileResponse);
+  assert.equal(ownerProfileResponse.body.stats.views, 10);
+  assert.equal(ownerProfileResponse.body.stats.likes, 3);
+
   const postsResponse = makeResponse();
   await profileController.getPosts({ params: { username: creator.username } }, postsResponse);
   assert.deepEqual(postsResponse.body.map((post) => post.title), ['Public']);
   clearVideoStore();
+});
+
+test('profile relationship lists paginate and return only public user fields', async () => {
+  const suffix = Date.now().toString();
+  const firstUser = { id: `relationship-first-${suffix}`, name: 'First User', email: `first-${suffix}@example.com`, username: `first_${suffix}`, password: 'private' };
+  const secondUser = { id: `relationship-second-${suffix}`, name: 'Second User', email: `second-${suffix}@example.com`, username: `second_${suffix}`, password: 'private' };
+  const creator = {
+    id: `relationship-creator-${suffix}`,
+    name: 'Relationship Creator',
+    email: `creator-${suffix}@example.com`,
+    username: `creator_${suffix}`,
+    password: 'private',
+    followerIds: [firstUser.id, secondUser.id],
+    followingIds: [],
+  };
+  await createUser(creator);
+  await createUser(firstUser);
+  await createUser(secondUser);
+
+  const response = makeResponse();
+  await profileController.getProfileRelationships({
+    params: { username: creator.username, type: 'followers' },
+    query: { page: '1', limit: '1' },
+  }, response);
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.users.length, 1);
+  assert.equal(response.body.users[0].id, firstUser.id);
+  assert.equal(response.body.hasMore, true);
+  assert.equal(response.body.total, 2);
+  assert.equal(Object.hasOwn(response.body.users[0], 'email'), false);
+  assert.equal(Object.hasOwn(response.body.users[0], 'password'), false);
 });
 
 test('optional authentication permits anonymous reads but rejects an invalid supplied token', () => {

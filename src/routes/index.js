@@ -31,6 +31,7 @@ router.use('/videos', videoRoutes);
 router.use('/messages', messageRoutes);
 router.get('/search/profiles', authenticate, profileController.searchProfiles);
 router.get('/profiles/:username', optionalAuth, profileController.getProfile);
+router.get('/profiles/:username/relationships/:type', optionalAuth, profileController.getProfileRelationships);
 router.get('/profiles/:username/posts', optionalAuth, profileController.getPosts);
 router.get('/profiles/:username/reshares', optionalAuth, profileController.getReshares);
 router.patch('/profile/me', authenticate, profileController.updateProfile);

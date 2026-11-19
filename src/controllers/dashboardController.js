@@ -4,6 +4,20 @@ const { initializeTransaction, verifyTransaction } = require('../services/paysta
 const { getWallet, creditWallet } = require('../services/walletStore');
 const { getComedianAccess } = require('../config/comedianLevels');
 
+const describeNotification = (notification) => {
+  const actor = notification.actorName || notification.actorUsername || 'Someone';
+  const descriptions = {
+    like: `${actor} liked your video.`,
+    comment: `${actor} said: “${notification.comment}”`,
+    save: `${actor} saved your video.`,
+    follow: `${actor} started following you.`,
+    'follow-back': `${actor} followed you back.`,
+    reshare: `${actor} reshared your post.`,
+    mention: `${actor} mentioned you in a post.`,
+  };
+  return descriptions[notification.type] || `${actor} interacted with your content.`;
+};
+
 const getDashboardSummary = async (req, res) => {
   return res.json({
     totals: {
@@ -123,7 +137,7 @@ const getNotifications = async (req, res) => {
     ...item,
     id: item.id || item._id?.toString(),
     title: { like: 'Video liked', comment: 'New comment', save: 'Video saved', follow: 'New follower', 'follow-back': 'Followed back', reshare: 'Post reshared', mention: 'Mentioned in a post' }[item.type] || 'New activity',
-    description: item.type === 'comment' ? `${item.actorName || item.actorUsername} said: “${item.comment}”` : `${item.actorName || item.actorUsername} ${item.type === 'follow' ? 'started following you.' : item.type === 'save' ? 'saved your video.' : item.type === 'like' ? 'liked your video.' : item.type === 'reshare' ? 'reshared your post.' : 'interacted with your content.'}`,
+    description: describeNotification(item),
     actor: item.actorName || item.actorUsername,
     username: item.actorUsername ? `@${item.actorUsername.replace(/^@/, '')}` : '',
     time: new Date(item.createdAt).toLocaleString(),
@@ -161,13 +175,12 @@ const getActivityFeed = async (req, res) => {
     category: 'Social',
     time: new Date(notification.createdAt).toLocaleString(),
     occurredAt: notification.createdAt,
-    detail: notification.type === 'comment'
-      ? `${notification.actorName || notification.actorUsername} said: “${notification.comment}”`
-      : `${notification.actorName || notification.actorUsername} ${notification.type === 'follow' ? 'started following you.' : notification.type === 'like' ? 'liked your video.' : notification.type === 'save' ? 'saved your video.' : notification.type === 'reshare' ? 'reshared your post.' : 'interacted with your content.'}`,
+    detail: describeNotification(notification),
     notification: {
       type: notification.type,
       unread: !notification.readAt,
       actorUsername: notification.actorUsername || '',
+      videoId: notification.videoId || '',
     },
   }));
   const walletActivity = (wallet.recentTransactions || []).map((transaction) => {

@@ -15,6 +15,7 @@ const liveRoomSchema = new mongoose.Schema({
   ticketPublishingEnabled: { type: Boolean, default: false },
   pricingMode: { type: String, enum: ['free', 'paid'], default: 'free' },
   viewerCount: { type: Number, default: 0 },
+  blockedParticipantIds: { type: [String], default: [] },
 }, { timestamps: true });
 
 module.exports = mongoose.model('LiveRoom', liveRoomSchema);

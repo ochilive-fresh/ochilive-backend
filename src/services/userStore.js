@@ -61,6 +61,25 @@ const findById = async (id) => {
   }
 };
 
+const findManyByIds = async (ids) => {
+  const requestedIds = [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean))];
+  if (!requestedIds.length) return [];
+  if (shouldUseMemoryStore()) {
+    const usersById = new Map(memoryUsers.map((user) => [String(user.id), user]));
+    return requestedIds.map((id) => usersById.get(id)).filter(Boolean);
+  }
+  try {
+    const users = await User.find({ id: { $in: requestedIds } }).lean();
+    const usersById = new Map(users.map((user) => [String(user.id), user]));
+    return requestedIds.map((id) => usersById.get(id)).filter(Boolean);
+  } catch (error) {
+    if (isMongoRequired()) throw error;
+    console.warn('MongoDB unavailable for findManyByIds, falling back to memory store:', error.message);
+    const usersById = new Map(memoryUsers.map((user) => [String(user.id), user]));
+    return requestedIds.map((id) => usersById.get(id)).filter(Boolean);
+  }
+};
+
 const findByUsername = async (username) => {
   if (!username) return null;
   const normalized = username.toLowerCase();
@@ -209,6 +228,7 @@ module.exports = {
   findUsersByEmail,
   countUsersByEmail,
   findById,
+  findManyByIds,
   findByUsername,
   searchUsers,
   updateById,

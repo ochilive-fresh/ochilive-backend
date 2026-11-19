@@ -52,22 +52,22 @@ exports.sendMessage = async (req, res) => {
 
     // Get sender and receiver info
     const sender = await User.findOne({ id: senderId });
-    const receiver = await User.findOne({ id: receiverId });
+    const receiver = await User.findOne({ id: rawReceiverId });
 
     if (!sender || !receiver) {
       return res.status(404).json({ message: 'Sender or receiver not found' });
     }
 
-    if (senderId === receiverId) {
+    if (senderId === rawReceiverId) {
       return res.status(400).json({ message: 'Cannot message yourself' });
     }
 
     // Check if conversation exists
-    const conversationId = generateConversationId(senderId, receiverId);
+    const conversationId = generateConversationId(senderId, rawReceiverId);
     let conversation = await Conversation.findOne({ conversationId });
 
     // Determine inbox type based on comedian rules
-    const senderFollowsReceiver = isFollowing(sender.followingIds, receiverId);
+    const senderFollowsReceiver = isFollowing(sender.followingIds, rawReceiverId);
     const inboxType = determineInboxType(sender.accountType, receiver.accountType, senderFollowsReceiver);
 
     // Create or update conversation
@@ -80,7 +80,7 @@ exports.sendMessage = async (req, res) => {
           user1Username: sender.username,
           user1ProfilePictureUrl: sender.profilePictureUrl,
           user1AccountType: sender.accountType,
-          user2Id: receiverId,
+          user2Id: rawReceiverId,
           user2Name: receiver.name,
           user2Username: receiver.username,
           user2ProfilePictureUrl: receiver.profilePictureUrl,

@@ -1,5 +1,5 @@
 const express = require('express');
-const { AccessToken } = require('livekit-server-sdk');
+const { AccessToken, RoomServiceClient } = require('livekit-server-sdk');
 const authenticate = require('../middleware/authGuard');
 const optionalAuth = require('../middleware/optionalAuthGuard');
 const requireComedian = require('../middleware/comedianGuard');
@@ -47,11 +47,17 @@ const createLiveKitToken = async (user, roomId, role = 'viewer') => {
     roomJoin: true,
     canPublish: role === 'host',
     canSubscribe: true,
-    canPublishData: role === 'host',
+    canPublishData: true,
     canUpdateOwnMetadata: role === 'host',
   });
 
   return { token: await token.toJwt(), livekitUrl: process.env.LIVEKIT_URL };
+};
+
+const createRoomService = () => {
+  ensureLiveKitConfig();
+  const serviceUrl = process.env.LIVEKIT_URL.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+  return new RoomServiceClient(serviceUrl, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
 };
 
 const getRoomForToken = async (roomId, hostId = null) => {
@@ -87,6 +93,9 @@ const issueViewerToken = async (req, res) => {
     if (room.status !== 'live') {
       return res.status(409).json({ message: 'This live room is not active yet.' });
     }
+    if ((room.blockedParticipantIds || []).map(String).includes(String(req.user.id))) {
+      return res.status(403).json({ message: 'You have been removed from this live room.' });
+    }
     const payload = await createLiveKitToken(req.user, room.id, 'viewer');
     return res.json({
       roomId: room.id,
@@ -97,6 +106,42 @@ const issueViewerToken = async (req, res) => {
   } catch (error) {
     const message = error?.message || 'Unable to generate the viewer token.';
     return res.status(error?.message === 'Live room not found.' ? 404 : 500).json({ message });
+  }
+};
+
+const removeLiveParticipant = async (req, res) => {
+  const identity = String(req.body?.identity || '').trim();
+  if (!identity) return res.status(400).json({ message: 'Choose a participant to remove.' });
+  if (identity === String(req.user.id)) return res.status(400).json({ message: 'You cannot remove yourself from your room.' });
+
+  try {
+    const room = await LiveRoom.findOne({ id: req.params.id, hostId: req.user.id, status: 'live' });
+    if (!room) return res.status(404).json({ message: 'Live room not found or no longer active.' });
+    const livekit = createRoomService();
+    const participants = await livekit.listParticipants(room.id);
+    if (!participants.some((participant) => participant.identity === identity)) {
+      return res.status(404).json({ message: 'Participant is no longer in this room.' });
+    }
+
+    const alreadyBlocked = (room.blockedParticipantIds || []).map(String).includes(identity);
+    if (!alreadyBlocked) {
+      await LiveRoom.updateOne({ _id: room._id }, { $addToSet: { blockedParticipantIds: identity } });
+    }
+
+    try {
+      await livekit.removeParticipant(room.id, identity, { revokeTokenTs: BigInt(Math.floor(Date.now() / 1000)) });
+    } catch (error) {
+      if (!alreadyBlocked) {
+        await LiveRoom.updateOne({ _id: room._id }, { $pull: { blockedParticipantIds: identity } });
+      }
+      throw error;
+    }
+
+    return res.json({ ok: true, message: 'Participant removed from the room.' });
+  } catch (error) {
+    console.error('Unable to remove live room participant:', error.message);
+    const status = error?.message?.includes('environment variables are missing') ? 503 : 502;
+    return res.status(status).json({ message: error?.message || 'Unable to remove this participant.' });
   }
 };
 
@@ -147,6 +192,7 @@ router.post('/live/rooms/:id/start', authenticate, requireComedian, startRoom);
 router.post('/live/rooms/:id/end', authenticate, requireComedian, endRoom);
 router.post('/live/rooms/:id/host-token', authenticate, requireComedian, issueHostToken);
 router.post('/live/rooms/:id/viewer-token', authenticate, issueViewerToken);
+router.post('/live/rooms/:id/participants/remove', authenticate, removeLiveParticipant);
 router.post('/:id/view', incrementViews);
 router.post('/:id/like', authenticate, likeVideo);
 router.post('/:id/reshare', authenticate, reshareVideo);
