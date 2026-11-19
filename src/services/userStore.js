@@ -5,6 +5,13 @@ const memoryUsers = [];
 const passwordResets = new Map();
 
 const isMongoReady = () => mongoose.connection.readyState === 1 && typeof User !== 'undefined';
+const isMongoRequired = () => Boolean(process.env.MONGO_URI) && process.env.NODE_ENV !== 'test';
+const shouldUseMemoryStore = () => {
+  if (isMongoRequired() && !isMongoReady()) {
+    throw new Error('MongoDB is configured but not connected; persistent user data is unavailable.');
+  }
+  return !isMongoReady();
+};
 
 const normalizeSearchText = (value) => String(value || '')
   .normalize('NFKD')
@@ -16,23 +23,25 @@ const normalizeSearchText = (value) => String(value || '')
   .trim();
 
 const findByEmail = async (email) => {
-  if (!isMongoReady()) {
+  if (shouldUseMemoryStore()) {
     return memoryUsers.find((user) => user.email === email) || null;
   }
 
   try {
     return await User.findOne({ email }).lean();
   } catch (error) {
+    if (isMongoRequired()) throw error;
     console.warn('MongoDB unavailable for findByEmail, falling back to memory store:', error.message);
     return memoryUsers.find((user) => user.email === email) || null;
   }
 };
 
 const findUsersByEmail = async (email) => {
-  if (!isMongoReady()) return memoryUsers.filter((user) => user.email === email);
+  if (shouldUseMemoryStore()) return memoryUsers.filter((user) => user.email === email);
   try {
     return await User.find({ email }).lean();
   } catch (error) {
+    if (isMongoRequired()) throw error;
     console.warn('MongoDB unavailable for findUsersByEmail, falling back to memory store:', error.message);
     return memoryUsers.filter((user) => user.email === email);
   }
@@ -42,10 +51,11 @@ const countUsersByEmail = async (email) => (await findUsersByEmail(email)).lengt
 
 const findById = async (id) => {
   if (!id) return null;
-  if (!isMongoReady()) return memoryUsers.find((user) => user.id === id) || null;
+  if (shouldUseMemoryStore()) return memoryUsers.find((user) => user.id === id) || null;
   try {
     return await User.findOne({ id }).lean();
   } catch (error) {
+    if (isMongoRequired()) throw error;
     console.warn('MongoDB unavailable for findById, falling back to memory store:', error.message);
     return memoryUsers.find((user) => user.id === id) || null;
   }
@@ -54,10 +64,11 @@ const findById = async (id) => {
 const findByUsername = async (username) => {
   if (!username) return null;
   const normalized = username.toLowerCase();
-  if (!isMongoReady()) return memoryUsers.find((user) => user.username === normalized) || null;
+  if (shouldUseMemoryStore()) return memoryUsers.find((user) => user.username === normalized) || null;
   try {
     return await User.findOne({ username: normalized }).lean();
   } catch (error) {
+    if (isMongoRequired()) throw error;
     console.warn('MongoDB unavailable for findByUsername, falling back to memory store:', error.message);
     return memoryUsers.find((user) => user.username === normalized) || null;
   }
@@ -86,7 +97,7 @@ const searchUsers = async (query, limit = 12) => {
     return 4;
   };
 
-  if (!isMongoReady()) {
+  if (shouldUseMemoryStore()) {
     return memoryUsers
       .filter(matchesUser)
       .sort((first, second) => scoreUser(first) - scoreUser(second))
@@ -107,6 +118,7 @@ const searchUsers = async (query, limit = 12) => {
       .sort((first, second) => scoreUser(first) - scoreUser(second))
       .slice(0, limit));
   } catch (error) {
+    if (isMongoRequired()) throw error;
     console.warn('MongoDB unavailable for searchUsers, falling back to memory store:', error.message);
     return memoryUsers
       .filter(matchesUser)
@@ -116,7 +128,7 @@ const searchUsers = async (query, limit = 12) => {
 };
 
 const updateById = async (id, updates) => {
-  if (!isMongoReady()) {
+  if (shouldUseMemoryStore()) {
     const user = memoryUsers.find((item) => item.id === id);
     if (user) Object.assign(user, updates);
     return user || null;
@@ -124,6 +136,7 @@ const updateById = async (id, updates) => {
   try {
     return await User.findOneAndUpdate({ id }, { $set: updates }, { new: true, lean: true });
   } catch (error) {
+    if (isMongoRequired()) throw error;
     console.warn('MongoDB unavailable for updateById, falling back to memory store:', error.message);
     const user = memoryUsers.find((item) => item.id === id);
     if (user) Object.assign(user, updates);
@@ -132,7 +145,7 @@ const updateById = async (id, updates) => {
 };
 
 const updateRelationships = async (id, update) => {
-  if (!isMongoReady()) {
+  if (shouldUseMemoryStore()) {
     const user = memoryUsers.find((item) => item.id === id);
     if (user) {
       user.followerIds = update.followerIds || user.followerIds;
@@ -143,6 +156,7 @@ const updateRelationships = async (id, update) => {
   try {
     return await User.findOneAndUpdate({ id }, { $set: update }, { new: true, lean: true });
   } catch (error) {
+    if (isMongoRequired()) throw error;
     console.warn('MongoDB unavailable for updateRelationships, falling back to memory store:', error.message);
     const user = memoryUsers.find((item) => item.id === id);
     if (user) Object.assign(user, update);
@@ -152,16 +166,17 @@ const updateRelationships = async (id, update) => {
 
 const usernameExists = async (username, exceptId) => {
   const normalized = username.toLowerCase();
-  if (!isMongoReady()) return memoryUsers.some((user) => user.username === normalized && user.id !== exceptId);
+  if (shouldUseMemoryStore()) return memoryUsers.some((user) => user.username === normalized && user.id !== exceptId);
   try {
     return Boolean(await User.findOne({ username: normalized, ...(exceptId ? { id: { $ne: exceptId } } : {}) }).lean());
   } catch (error) {
+    if (isMongoRequired()) throw error;
     return memoryUsers.some((user) => user.username === normalized && user.id !== exceptId);
   }
 };
 
 const createUser = async (user) => {
-  if (!isMongoReady()) {
+  if (shouldUseMemoryStore()) {
     memoryUsers.push(user);
     return user;
   }
@@ -171,6 +186,7 @@ const createUser = async (user) => {
     return created.toObject();
   } catch (error) {
     if (error.code === 11000) throw error;
+    if (process.env.MONGO_URI) throw error;
     console.warn('MongoDB unavailable for createUser, falling back to memory store:', error.message);
     memoryUsers.push(user);
     return user;

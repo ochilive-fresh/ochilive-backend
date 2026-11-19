@@ -13,6 +13,7 @@ const { getVideoById } = require('../src/controllers/videoController');
 const profileController = require('../src/controllers/profileController');
 const { createUser } = require('../src/services/userStore');
 const optionalAuth = require('../src/middleware/optionalAuthGuard');
+const { loginUser } = require('../src/controllers/authController');
 
 const makeResponse = () => ({
   statusCode: 200,
@@ -197,4 +198,28 @@ test('optional authentication permits anonymous reads but rejects an invalid sup
   optionalAuth({ headers: { authorization: 'Bearer invalid-token' } }, invalidResponse, () => { invalidNextCalled = true; });
   assert.equal(invalidNextCalled, false);
   assert.equal(invalidResponse.statusCode, 401);
+});
+
+test('configured but unavailable MongoDB does not accept or authenticate in-memory users', async () => {
+  const previousMongoUri = process.env.MONGO_URI;
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.MONGO_URI = 'mongodb://127.0.0.1:27017/unavailable';
+  process.env.NODE_ENV = 'production';
+
+  try {
+    await assert.rejects(
+      createUser({ id: 'temporary-user', username: 'temporary_user' }),
+      /MongoDB is configured but not connected/
+    );
+
+    const response = makeResponse();
+    await loginUser({ body: { identity: 'temporary_user', password: 'StrongPass123!' } }, response);
+    assert.equal(response.statusCode, 503);
+    assert.match(response.body.message, /Unable to verify your account right now/);
+  } finally {
+    if (previousMongoUri === undefined) delete process.env.MONGO_URI;
+    else process.env.MONGO_URI = previousMongoUri;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
 });

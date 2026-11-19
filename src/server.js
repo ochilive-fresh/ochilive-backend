@@ -202,7 +202,13 @@ const startServer = (port) => {
 };
 
 if (require.main === module && process.env.NODE_ENV !== 'test') {
-  connectDB().finally(() => startServer(PORT));
+  connectDB().then((connected) => {
+    if (process.env.MONGO_URI && !connected) {
+      console.error('Server startup aborted because the configured MongoDB database is unavailable.');
+      process.exit(1);
+    }
+    startServer(PORT);
+  });
 }
 
 module.exports = { app, server, io };

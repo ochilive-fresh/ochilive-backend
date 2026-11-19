@@ -76,7 +76,14 @@ exports.registerUser = async (req, res) => {
     return res.status(400).json({ message: 'Username must be 3-24 characters using only letters, numbers, and underscores.' });
   }
 
-  if (await usernameExists(normalizedUsername)) {
+  let nameTaken;
+  try {
+    nameTaken = await usernameExists(normalizedUsername);
+  } catch (error) {
+    console.error('Unable to check username availability during signup:', error.message);
+    return res.status(503).json({ message: 'Account storage is unavailable right now. Please try again shortly.' });
+  }
+  if (nameTaken) {
     return res.status(409).json({ message: 'That username is already taken.' });
   }
 
@@ -84,7 +91,13 @@ exports.registerUser = async (req, res) => {
     return res.status(400).json({ message: 'Password must be at least 8 characters and include uppercase, lowercase, a number, and a symbol.' });
   }
 
-  const accountCount = await countUsersByEmail(normalizedEmail);
+  let accountCount;
+  try {
+    accountCount = await countUsersByEmail(normalizedEmail);
+  } catch (error) {
+    console.error('Unable to check account limit during signup:', error.message);
+    return res.status(503).json({ message: 'Account storage is unavailable right now. Please try again shortly.' });
+  }
 
   if (accountCount >= 2) {
     return res.status(409).json({ message: 'This email has reached the two-account limit. Please use another email.' });
@@ -109,6 +122,7 @@ exports.registerUser = async (req, res) => {
   } catch (error) {
     if (error.code === 11000) return res.status(409).json({ message: 'That username was just taken. Please choose another one.' });
     console.error('Unable to create account:', error.message);
+    if (process.env.MONGO_URI && process.env.NODE_ENV !== 'test') return res.status(503).json({ message: 'Account storage is unavailable right now. Please try again shortly.' });
     return res.status(500).json({ message: 'Unable to create your account right now.' });
   }
 
@@ -283,9 +297,15 @@ exports.loginUser = async (req, res) => {
 
   const normalizedIdentity = loginIdentity.toLowerCase().trim();
   const isEmail = normalizedIdentity.includes('@');
-  const matchingUsers = isEmail
-    ? await findUsersByEmail(normalizedIdentity)
-    : [await findByUsername(normalizedIdentity)].filter(Boolean);
+  let matchingUsers;
+  try {
+    matchingUsers = isEmail
+      ? await findUsersByEmail(normalizedIdentity)
+      : [await findByUsername(normalizedIdentity)].filter(Boolean);
+  } catch (error) {
+    console.error('Unable to verify login against user storage:', error.message);
+    return res.status(503).json({ message: 'Unable to verify your account right now. Please try again shortly.' });
+  }
   const existingUser = matchingUsers.find((user) => user.password === password.trim());
 
   if (!existingUser || existingUser.password !== password.trim()) {
