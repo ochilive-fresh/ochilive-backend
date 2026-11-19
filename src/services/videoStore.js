@@ -22,7 +22,12 @@ const normalizeVideo = (video = {}) => {
     likes: Number(video.likes || 0),
     comments: Number(video.comments || 0),
     likedBy: Array.isArray(video.likedBy) ? video.likedBy.map(String) : [],
-    commentThread: Array.isArray(video.commentThread) ? video.commentThread : [],
+    commentThread: Array.isArray(video.commentThread) ? video.commentThread.map((comment) => ({
+      ...comment,
+      commentId: comment.commentId || comment._id?.toString?.() || makeId(),
+      parentCommentId: comment.parentCommentId || null,
+    })) : [],
+    allowComments: video.allowComments !== false,
     type: video.type === 'photo' ? 'photo' : 'video',
     visibility: ['public', 'followers', 'private'].includes(video.visibility) ? video.visibility : 'public',
     status,
@@ -62,11 +67,14 @@ const updateLikeState = async (videoId, userId) => {
   if (!video) return null;
 
   const alreadyLiked = Array.isArray(video.likedBy) && video.likedBy.includes(String(userId));
-  if (alreadyLiked) return { ...normalizeVideo(video), liked: true };
-
-  video.likedBy = Array.isArray(video.likedBy) ? [...video.likedBy, String(userId)] : [String(userId)];
-  video.likes = Number(video.likes || 0) + 1;
-  return { ...normalizeVideo(video), liked: true };
+  if (alreadyLiked) {
+    video.likedBy = video.likedBy.filter((id) => id !== String(userId));
+    video.likes = Math.max(0, Number(video.likes || 0) - 1);
+  } else {
+    video.likedBy = Array.isArray(video.likedBy) ? [...video.likedBy, String(userId)] : [String(userId)];
+    video.likes = Number(video.likes || 0) + 1;
+  }
+  return { ...normalizeVideo(video), liked: !alreadyLiked };
 };
 
 const addCommentToVideo = async (videoId, commentEntry) => {

@@ -79,10 +79,10 @@ test('api root is reachable', async () => {
   assert.ok(response.body?.message || response.raw.includes('Backend API root'));
 });
 
-test('protected feed route responds with authentication requirement', async () => {
+test('public feed route is available without an authentication session', async () => {
   const response = await sendRequest('/videos/?mode=for_you');
-  assert.equal(response.statusCode, 401);
-  assert.equal(response.body.message, 'Authentication required.');
+  assert.equal(response.statusCode, 200);
+  assert.ok(Array.isArray(response.body));
 });
 
 test('protected discover route responds with authentication requirement', async () => {

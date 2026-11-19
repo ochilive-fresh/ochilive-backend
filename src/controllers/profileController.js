@@ -3,7 +3,7 @@ const User = require('../models/User');
 const Video = require('../models/Video');
 const Reshare = require('../models/Reshare');
 const { findByUsername, searchUsers, updateById, updateRelationships, usernameExists } = require('../services/userStore');
-const { countVideosByCreator, listVideosByCreator } = require('../services/videoStore');
+const { listVideosByCreator } = require('../services/videoStore');
 const { getUsernameValidation, normalizeUsername } = require('../utils/usernamePolicy');
 const { createNotification } = require('../services/notificationStore');
 const { getComedianAccess } = require('../config/comedianLevels');
@@ -39,14 +39,27 @@ const profilePayload = (user, viewerId) => ({
 });
 
 const getProfile = async (req, res) => {
-  const username = req.params.username || req.user.username;
+  const username = req.params.username || req.user?.username;
   const user = await findByUsername(username);
   if (!user) return res.status(404).json({ message: 'Profile not found.' });
-  const payload = profilePayload(user, req.user.id);
+  const viewerId = String(req.user?.id || '');
+  const isOwnProfile = viewerId === String(user.id);
+  const canSeeFollowersPosts = isOwnProfile || (Array.isArray(req.user?.followingIds) && req.user.followingIds.map(String).includes(String(user.id)));
+  const payload = profilePayload(user, viewerId);
   if (isMongoReady()) {
-    payload.stats.posts = await Video.countDocuments({ creatorId: user.id, status: { $in: ['published', 'queued'] } });
+    const visibility = canSeeFollowersPosts ? ['public', 'followers'] : ['public'];
+    if (isOwnProfile) visibility.push('private');
+    const statuses = isOwnProfile ? ['published', 'queued'] : ['published'];
+    payload.stats.posts = await Video.countDocuments({ creatorId: user.id, status: { $in: statuses }, visibility: { $in: visibility } });
   } else {
-    payload.stats.posts = await countVideosByCreator(user.id);
+    const posts = await listVideosByCreator(user.id);
+    payload.stats.posts = posts.filter((post) => {
+      const visibleStatus = post.status === 'published' || (isOwnProfile && post.status === 'queued');
+      const visibleToViewer = post.visibility === 'public'
+        || (post.visibility === 'followers' && canSeeFollowersPosts)
+        || (post.visibility === 'private' && isOwnProfile);
+      return visibleStatus && visibleToViewer;
+    }).length;
   }
   if (user.accountType === 'comedian') {
     payload.user.comedyProfile = { ...payload.user.comedyProfile, ...(await summarizeRatings(user.id)) };
@@ -207,6 +220,16 @@ const formatPost = (post) => ({
   duration: post.duration || '',
   createdAt: post.createdAt,
   type: post.type,
+  likes: Number(post.likes || 0),
+  comments: Number(post.comments || 0),
+  allowComments: post.allowComments !== false,
+  commentThread: Array.isArray(post.commentThread) ? post.commentThread.map((comment) => ({
+    commentId: comment.commentId,
+    parentCommentId: comment.parentCommentId || null,
+    userName: comment.userName || '',
+    text: comment.text,
+    createdAt: comment.createdAt,
+  })) : [],
 });
 
 const getPosts = async (req, res) => {
@@ -216,32 +239,61 @@ const getPosts = async (req, res) => {
   const canSeeFollowersPosts = viewerId === String(user.id) || (Array.isArray(req.user?.followingIds) && req.user.followingIds.map(String).includes(String(user.id)));
   if (!isMongoReady()) {
     const posts = await listVideosByCreator(user.id);
-    return res.json(posts.filter((post) => post.visibility === 'public' || (post.visibility === 'followers' && canSeeFollowersPosts) || (post.visibility === 'private' && viewerId === String(user.id))).map((post) => ({
-      id: post.id || post._id,
-      title: post.title,
-      description: post.description || '',
-      mediaUrl: post.mediaUrl,
-      thumbnailUrl: post.thumbnailUrl || post.mediaUrl,
-      category: post.category,
-      duration: post.duration || '',
-      createdAt: post.createdAt,
-      type: post.type,
+    return res.json(posts.filter((post) => {
+      const visibleStatus = post.status === 'published' || (viewerId === String(user.id) && post.status === 'queued');
+      const visibleToViewer = post.visibility === 'public'
+        || (post.visibility === 'followers' && canSeeFollowersPosts)
+        || (post.visibility === 'private' && viewerId === String(user.id));
+      return visibleStatus && visibleToViewer;
+    }).map((post) => ({
+      ...formatPost(post),
+      creatorId: user.id,
+      creatorName: user.name,
+      creatorUsername: user.username,
     })));
   }
   const visibility = canSeeFollowersPosts ? ['public', 'followers'] : ['public'];
   if (viewerId === String(user.id)) visibility.push('private');
-  const posts = await Video.find({ creatorId: user.id, status: { $in: ['published', 'queued'] }, visibility: { $in: visibility } }).sort({ createdAt: -1 }).lean();
-  return res.json(posts.map(formatPost));
+  const statuses = viewerId === String(user.id) ? ['published', 'queued'] : ['published'];
+  const posts = await Video.find({ creatorId: user.id, status: { $in: statuses }, visibility: { $in: visibility } }).sort({ createdAt: -1 }).lean();
+  return res.json(posts.map((post) => ({
+    ...formatPost(post),
+    creatorId: user.id,
+    creatorName: user.name,
+    creatorUsername: user.username,
+  })));
 };
 
 const getReshares = async (req, res) => {
   const user = await findByUsername(req.params.username);
   if (!user) return res.status(404).json({ message: 'Profile not found.' });
   if (!isMongoReady()) return res.json([]);
+  const viewerId = String(req.user?.id || '');
+  const followingIds = Array.isArray(req.user?.followingIds) ? req.user.followingIds.map(String) : [];
   const reshares = await Reshare.find({ userId: user.id }).sort({ createdAt: -1 }).lean();
-  const posts = await Video.find({ id: { $in: reshares.map((item) => item.postId) } }).lean();
-  const postMap = new Map(posts.map((post) => [post.id || post._id.toString(), post]));
-  return res.json(reshares.map((item) => ({ ...formatPost(postMap.get(item.postId) || {}), resharedAt: item.createdAt })));
+  const postIds = reshares.map((item) => item.postId).filter((id) => mongoose.Types.ObjectId.isValid(id));
+  const posts = await Video.find({ _id: { $in: postIds }, status: 'published' }).lean();
+  const postMap = new Map(posts.map((post) => [post._id.toString(), post]));
+  const visibleReshares = reshares.flatMap((item) => {
+    const post = postMap.get(item.postId);
+    if (!post) return [];
+    const creatorId = String(post.creatorId || '');
+    const canView = post.visibility === 'public'
+      || (post.visibility === 'followers' && followingIds.includes(creatorId))
+      || (post.visibility === 'private' && creatorId === viewerId);
+    return canView ? [{ post, resharedAt: item.createdAt }] : [];
+  });
+  const formattedReshares = await Promise.all(visibleReshares.map(async ({ post, resharedAt }) => {
+    const creator = post.creatorId ? await findById(post.creatorId) : null;
+    return {
+      ...formatPost(post),
+      creatorId: post.creatorId,
+      creatorName: creator?.name || post.creatorName || 'Ochi Creator',
+      creatorUsername: creator?.username || post.creatorUsername || '',
+      resharedAt,
+    };
+  }));
+  return res.json(formattedReshares);
 };
 
 module.exports = { getProfile, updateProfile, updateProfilePicture, completeComedyOnboarding, followProfile, unfollowProfile, rateProfile, searchProfiles, getPosts, getReshares };

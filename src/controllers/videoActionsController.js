@@ -40,7 +40,12 @@ const formatVideo = (video) => ({
   likes: Number(video.likes || 0),
   comments: Number(video.comments || 0),
   likedBy: Array.isArray(video.likedBy) ? video.likedBy : [],
-  commentThread: Array.isArray(video.commentThread) ? video.commentThread : [],
+  commentThread: Array.isArray(video.commentThread) ? video.commentThread.map((comment) => ({
+    ...comment,
+    commentId: comment.commentId || comment._id?.toString?.(),
+    parentCommentId: comment.parentCommentId || null,
+  })) : [],
+  allowComments: video.allowComments !== false,
   type: video.type,
   createdAt: video.createdAt ? new Date(video.createdAt).toISOString() : undefined,
 });
@@ -73,14 +78,11 @@ const likeVideo = async (req, res) => {
         return res.status(404).json({ message: 'Video not found.' });
       }
 
-      const likedBy = Array.isArray(video.likedBy) ? video.likedBy.map(String) : [];
-      if (likedBy.includes(String(req.user.id))) {
-        return res.json({ ...formatVideo(video), liked: true, message: 'You already liked this video.' });
-      }
-
       const updated = await updateLikeState(req.params.id, req.user.id);
-      await createNotification({ recipientId: updated.creatorId, actorId: req.user.id, actorName: req.user.name, actorUsername: req.user.username, actorProfilePictureUrl: req.user.profilePictureUrl, type: 'like', videoId: updated.id, videoTitle: updated.title });
-      return res.json({ ...formatVideo(updated), liked: true, message: 'Video liked.' });
+      if (updated.liked) {
+        await createNotification({ recipientId: updated.creatorId, actorId: req.user.id, actorName: req.user.name, actorUsername: req.user.username, actorProfilePictureUrl: req.user.profilePictureUrl, type: 'like', videoId: updated.id, videoTitle: updated.title });
+      }
+      return res.json({ ...formatVideo(updated), liked: updated.liked, message: updated.liked ? 'Video liked.' : 'Like removed.' });
     }
 
     const video = await Video.findById(req.params.id).lean();
@@ -88,19 +90,25 @@ const likeVideo = async (req, res) => {
       return res.status(404).json({ message: 'Video not found.' });
     }
 
-    if (Array.isArray(video.likedBy) && video.likedBy.includes(req.user.id)) {
-      return res.json({ ...formatVideo(video), liked: true, message: 'You already liked this video.' });
+    const alreadyLiked = Array.isArray(video.likedBy) && video.likedBy.map(String).includes(String(req.user.id));
+    const userId = String(req.user.id);
+    const update = alreadyLiked
+      ? { $pull: { likedBy: userId }, $inc: { likes: -1 } }
+      : { $addToSet: { likedBy: userId }, $inc: { likes: 1 } };
+    const updateFilter = alreadyLiked
+      ? { _id: req.params.id, likedBy: userId }
+      : { _id: req.params.id, likedBy: { $ne: userId } };
+    let updated = await Video.findOneAndUpdate(updateFilter, update, { new: true }).lean();
+    const changed = Boolean(updated);
+    if (!updated) updated = await Video.findById(req.params.id).lean();
+    if (!updated) return res.status(404).json({ message: 'Video not found.' });
+    updated.likes = Math.max(0, Number(updated.likes || 0));
+    const liked = Array.isArray(updated.likedBy) && updated.likedBy.map(String).includes(userId);
+    if (changed && liked && !alreadyLiked) {
+      await createNotification({ recipientId: updated.creatorId, actorId: req.user.id, actorName: req.user.name, actorUsername: req.user.username, actorProfilePictureUrl: req.user.profilePictureUrl, type: 'like', videoId: updated._id.toString(), videoTitle: updated.title });
     }
 
-    const updated = await Video.findByIdAndUpdate(
-      req.params.id,
-      { $addToSet: { likedBy: req.user.id }, $inc: { likes: 1 } },
-      { new: true }
-    ).lean();
-
-    await createNotification({ recipientId: updated.creatorId, actorId: req.user.id, actorName: req.user.name, actorUsername: req.user.username, actorProfilePictureUrl: req.user.profilePictureUrl, type: 'like', videoId: updated._id.toString(), videoTitle: updated.title });
-
-    return res.json({ ...formatVideo(updated), liked: true, message: 'Video liked.' });
+    return res.json({ ...formatVideo(updated), liked, message: liked ? 'Video liked.' : 'Like removed.' });
   } catch (error) {
     console.error('likeVideo error:', error.message);
     return res.status(500).json({ message: 'Unable to like the video.' });
@@ -108,7 +116,7 @@ const likeVideo = async (req, res) => {
 };
 
 const commentOnVideo = async (req, res) => {
-  const { comment } = req.body || {};
+  const { comment, parentCommentId } = req.body || {};
   const cleanedComment = String(comment || '').trim();
   if (!cleanedComment) {
     return res.status(400).json({ message: 'Comment text is required.' });
@@ -120,8 +128,17 @@ const commentOnVideo = async (req, res) => {
       if (!video) {
         return res.status(404).json({ message: 'Video not found.' });
       }
+      if (video.allowComments === false) {
+        return res.status(403).json({ message: 'Comments are disabled for this post.' });
+      }
+      const parent = parentCommentId
+        ? video.commentThread?.find((entry) => String(entry.commentId || entry._id) === String(parentCommentId) && !entry.parentCommentId)
+        : null;
+      if (parentCommentId && !parent) return res.status(404).json({ message: 'The comment you are replying to could not be found.' });
 
       const entry = {
+        commentId: new mongoose.Types.ObjectId().toString(),
+        parentCommentId: parent?.commentId || parent?._id?.toString?.() || null,
         userId: req.user.id,
         userName: req.user.name || req.user.username || 'Creator',
         text: cleanedComment,
@@ -141,8 +158,20 @@ const commentOnVideo = async (req, res) => {
     if (!video) {
       return res.status(404).json({ message: 'Video not found.' });
     }
+    if (video.allowComments === false) {
+      return res.status(403).json({ message: 'Comments are disabled for this post.' });
+    }
+
+    const parent = parentCommentId
+      ? video.commentThread.find((entry) => String(entry.commentId || entry._id) === String(parentCommentId) && !entry.parentCommentId)
+      : null;
+    if (parentCommentId && !parent) {
+      return res.status(404).json({ message: 'The comment you are replying to could not be found.' });
+    }
 
     const commentEntry = {
+      commentId: new mongoose.Types.ObjectId().toString(),
+      parentCommentId: parent?.commentId || parent?._id?.toString?.() || null,
       userId: req.user.id,
       userName: req.user.name || req.user.username || 'Creator',
       text: cleanedComment,

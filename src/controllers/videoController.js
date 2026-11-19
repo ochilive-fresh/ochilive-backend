@@ -1,7 +1,7 @@
-const mongoose = require('mongoose');
+   const mongoose = require('mongoose');
 const Video = require('../models/Video');
 const LiveRoom = require('../models/LiveRoom');
-const { createVideo, listPublishedVideos } = require('../services/videoStore');
+const { createVideo, listPublishedVideos, findVideoById: findMemoryVideoById } = require('../services/videoStore');
 const { findById } = require('../services/userStore');
 
 const isMongoReady = () => mongoose.connection.readyState === 1 && typeof Video !== 'undefined';
@@ -22,8 +22,17 @@ const enrichFeedVideos = async (videos, viewer) => Promise.all(videos.map(async 
   const followingIds = Array.isArray(viewer?.followingIds) ? viewer.followingIds.map(String) : [];
   const viewerId = String(viewer?.id || '');
   const likedBy = Array.isArray(video.likedBy) ? video.likedBy.map(String) : [];
+  const safeVideo = { ...video };
+  delete safeVideo.likedBy;
+  if (Array.isArray(safeVideo.commentThread)) {
+    safeVideo.commentThread = safeVideo.commentThread.map((comment) => {
+      const safeComment = { ...comment };
+      delete safeComment.userId;
+      return safeComment;
+    });
+  }
   return {
-    ...video,
+    ...safeVideo,
     creatorUsername: creator?.username || video.creatorUsername || '',
     isFollowing: followingIds.includes(String(video.creatorId)),
     liked: Boolean(viewerId && likedBy.includes(viewerId)),
@@ -194,8 +203,51 @@ const getVideoFeed = async (req, res) => {
   }
 };
 
+const getVideoById = async (req, res) => {
+  try {
+    let video;
+    if (isMongoReady()) {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(404).json({ message: 'Video not found.' });
+      video = await Video.findById(req.params.id).lean();
+    } else {
+      video = await findMemoryVideoById(req.params.id);
+    }
+
+    if (!video || video.status !== 'published') return res.status(404).json({ message: 'Video not found.' });
+
+    const viewerId = String(req.user?.id || '');
+    const followingIds = Array.isArray(req.user?.followingIds) ? req.user.followingIds.map(String) : [];
+    const creatorId = String(video.creatorId || '');
+    const canView = video.visibility === 'public'
+      || (video.visibility === 'followers' && followingIds.includes(creatorId))
+      || (video.visibility === 'private' && creatorId === viewerId);
+    if (!canView) return res.status(404).json({ message: 'Video not found.' });
+
+    const creator = creatorId ? await findById(creatorId) : null;
+    const payload = normalizeVideoPayload(video);
+    const safePayload = { ...payload };
+    delete safePayload.likedBy;
+    if (Array.isArray(safePayload.commentThread)) {
+      safePayload.commentThread = safePayload.commentThread.map((comment) => {
+        const safeComment = { ...comment };
+        delete safeComment.userId;
+        return safeComment;
+      });
+    }
+    return res.json({
+      ...safePayload,
+      creatorUsername: creator?.username || video.creatorUsername || '',
+      isFollowing: followingIds.includes(creatorId),
+      liked: Array.isArray(video.likedBy) && video.likedBy.map(String).includes(viewerId),
+    });
+  } catch (error) {
+    console.error('Error fetching video:', error.message);
+    return res.status(500).json({ message: 'Unable to load this video at this time.' });
+  }
+};
+
 const uploadVideoPost = async (req, res) => {
-  const { title, mediaUrl, thumbnailUrl, category, description, type, visibility } = req.body || {};
+  const { title, mediaUrl, thumbnailUrl, category, description, type, visibility, allowComments } = req.body || {};
   const token = req.headers.authorization?.split('Bearer ')[1];
 
   if (!token) {
@@ -218,6 +270,7 @@ const uploadVideoPost = async (req, res) => {
           thumbnailUrl: thumbnailUrl?.trim() || mediaUrl.trim(),
           type: type === 'photo' ? 'photo' : 'video',
           visibility: ['public', 'followers', 'private'].includes(visibility) ? visibility : 'public',
+          allowComments: allowComments !== false,
           views: 0,
           likes: 0,
           comments: 0,
@@ -233,6 +286,7 @@ const uploadVideoPost = async (req, res) => {
           thumbnailUrl: thumbnailUrl?.trim() || mediaUrl.trim(),
           type: type === 'photo' ? 'photo' : 'video',
           visibility: ['public', 'followers', 'private'].includes(visibility) ? visibility : 'public',
+          allowComments: allowComments !== false,
           views: 0,
           likes: 0,
           comments: 0,
@@ -249,5 +303,6 @@ const uploadVideoPost = async (req, res) => {
 
 module.exports = {
   getVideoFeed,
+  getVideoById,
   uploadVideoPost,
 };

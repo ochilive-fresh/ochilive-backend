@@ -1,10 +1,11 @@
 const express = require('express');
 const { AccessToken } = require('livekit-server-sdk');
 const authenticate = require('../middleware/authGuard');
+const optionalAuth = require('../middleware/optionalAuthGuard');
 const requireComedian = require('../middleware/comedianGuard');
 const LiveRoom = require('../models/LiveRoom');
 const { createRoom, startRoom, endRoom } = require('../controllers/liveController');
-const { getVideoFeed, uploadVideoPost } = require('../controllers/videoController');
+const { getVideoFeed, getVideoById, uploadVideoPost } = require('../controllers/videoController');
 const { getVideoThumbnailUrl, getOptimizedMediaUrl, uploadBuffer } = require('../services/cloudinaryService');
 const {
   incrementViews,
@@ -99,7 +100,7 @@ const issueViewerToken = async (req, res) => {
   }
 };
 
-router.get('/', authenticate, getVideoFeed);
+router.get('/', optionalAuth, getVideoFeed);
 router.post('/upload', authenticate, uploadVideoPost);
 // Stream single media uploads to Cloudinary at /videos/upload-file.
 const handleMediaUpload = (req, res, next) => {
@@ -152,5 +153,6 @@ router.post('/:id/reshare', authenticate, reshareVideo);
 router.post('/:id/comments', authenticate, commentOnVideo);
 router.post('/:id/save', authenticate, toggleSaveVideo);
 router.get('/saved', authenticate, getSavedVideos);
+router.get('/:id', optionalAuth, getVideoById);
 
 module.exports = router;
