@@ -28,6 +28,33 @@ const makeResponse = () => ({
   },
 });
 
+test('video owners can delete posts and other users are forbidden', async () => {
+  clearVideoStore();
+  const video = await createVideo({
+    title: 'Owner delete test',
+    mediaUrl: 'https://example.com/delete.mp4',
+    creatorId: 'owner-1',
+  });
+
+  const forbiddenResponse = makeResponse();
+  await videoActionsController.deleteVideoPost({
+    params: { id: video.id },
+    user: { id: 'other-user' },
+  }, forbiddenResponse);
+  assert.equal(forbiddenResponse.statusCode, 403);
+  assert.equal((await findVideoById(video.id)).title, 'Owner delete test');
+
+  const deletedResponse = makeResponse();
+  await videoActionsController.deleteVideoPost({
+    params: { id: video.id },
+    user: { id: 'owner-1' },
+  }, deletedResponse);
+  assert.equal(deletedResponse.statusCode, 200);
+  assert.equal(deletedResponse.body.deleted, true);
+  assert.equal(await findVideoById(video.id), null);
+  clearVideoStore();
+});
+
 test('watch history persists completion and For You prioritizes unseen videos', async () => {
   clearVideoStore();
   const suffix = Date.now().toString();

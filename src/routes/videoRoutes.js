@@ -10,6 +10,7 @@ const { getVideoThumbnailUrl, getOptimizedMediaUrl, uploadBuffer } = require('..
 const {
   incrementViews,
   recordVideoWatch,
+  deleteVideoPost,
   likeVideo,
   commentOnVideo,
   toggleSaveVideo,
@@ -196,6 +197,7 @@ router.post('/live/rooms/:id/viewer-token', authenticate, issueViewerToken);
 router.post('/live/rooms/:id/participants/remove', authenticate, removeLiveParticipant);
 router.post('/:id/view', incrementViews);
 router.post('/:id/watch', authenticate, recordVideoWatch);
+router.delete('/:id', authenticate, deleteVideoPost);
 router.post('/:id/like', authenticate, likeVideo);
 router.post('/:id/reshare', authenticate, reshareVideo);
 router.post('/:id/comments', authenticate, commentOnVideo);

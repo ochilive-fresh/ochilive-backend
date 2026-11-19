@@ -46,6 +46,12 @@ const findVideoById = async (id) => {
   return match ? normalizeVideo(match) : null;
 };
 
+const deleteVideoById = async (id) => {
+  const index = memoryVideos.findIndex((video) => String(video.id) === String(id));
+  if (index < 0) return null;
+  return memoryVideos.splice(index, 1)[0];
+};
+
 const listPublishedVideos = async () => {
   return [...memoryVideos]
     .filter((video) => video.status === 'published')
@@ -94,6 +100,7 @@ module.exports = {
   memoryVideos,
   createVideo,
   findVideoById,
+  deleteVideoById,
   listPublishedVideos,
   listVideosByCreator,
   countVideosByCreator,

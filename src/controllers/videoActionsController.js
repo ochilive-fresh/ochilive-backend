@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const Video = require('../models/Video');
 const Reshare = require('../models/Reshare');
 const { toggleSavedVideo, getSavedVideoIds } = require('../services/savedStore');
-const { findVideoById: findMemoryVideoById, updateLikeState, addCommentToVideo } = require('../services/videoStore');
+const { findVideoById: findMemoryVideoById, deleteVideoById: deleteMemoryVideoById, updateLikeState, addCommentToVideo } = require('../services/videoStore');
 const { createNotification } = require('../services/notificationStore');
 const { recordVideoWatch: persistVideoWatch } = require('../services/userStore');
 
@@ -101,6 +101,34 @@ const recordVideoWatch = async (req, res) => {
     if (error.status === 404) return res.status(404).json({ message: 'Video not found.' });
     console.error('recordVideoWatch error:', error.message);
     return res.status(500).json({ message: 'Unable to save watch history.' });
+  }
+};
+
+const deleteVideoPost = async (req, res) => {
+  try {
+    const videoId = String(req.params.id || '');
+    let video;
+    if (isMongoReady()) {
+      if (!mongoose.Types.ObjectId.isValid(videoId)) return res.status(404).json({ message: 'Post not found.' });
+      video = await Video.findById(videoId).lean();
+    } else {
+      video = await findMemoryVideoById(videoId);
+    }
+    if (!video) return res.status(404).json({ message: 'Post not found.' });
+    if (String(video.creatorId || '') !== String(req.user.id || '')) {
+      return res.status(403).json({ message: 'You can only delete posts you created.' });
+    }
+
+    if (isMongoReady()) {
+      await Video.findByIdAndDelete(videoId);
+      await Reshare.deleteMany({ postId: videoId });
+    } else {
+      await deleteMemoryVideoById(videoId);
+    }
+    return res.json({ deleted: true, id: videoId, message: 'Post deleted.' });
+  } catch (error) {
+    console.error('deleteVideoPost error:', error.message);
+    return res.status(500).json({ message: 'Unable to delete this post.' });
   }
 };
 
@@ -274,6 +302,7 @@ const getSavedVideos = async (req, res) => {
 module.exports = {
   incrementViews,
   recordVideoWatch,
+  deleteVideoPost,
   likeVideo,
   commentOnVideo,
   reshareVideo,
